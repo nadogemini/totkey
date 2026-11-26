@@ -5,7 +5,7 @@ name: Totkey build
 on:
   push:
     branches: [main]
-    paths: ['totkey/**', '.github/workflows/totkey.yml']
+    paths: ['totkey/**', 'ink/**', '.github/workflows/totkey.yml']
   workflow_dispatch:
 
 concurrency:
