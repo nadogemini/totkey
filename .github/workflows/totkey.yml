@@ -53,7 +53,7 @@ jobs:
         run: |
           git clone -q https://github.com/No-Scrolling/ink ../ink
           git -C ../ink checkout -q "$INK_REF"
-          git -C ../ink apply tools/ink/titankeys.patch
+          git -C ../ink apply "$PWD/tools/ink/titankeys.patch"
           cat ../ink/sdk.json
 
       - uses: oven-sh/setup-bun@v2
