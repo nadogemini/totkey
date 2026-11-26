@@ -33,7 +33,7 @@ jobs:
           echo "MAIN_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/totkey"
           cp totkey/*.b64* "$RUNNER_TEMP/totkey/"
-          cp ink/titankeys-themes.patch "$RUNNER_TEMP/"
+          cp ink/titankeys-themes.patch totkey/trim.py "$RUNNER_TEMP/"
           echo "INK_PATCH_HASH=$(sha256sum ink/titankeys-themes.patch | cut -c1-16)" >> "$GITHUB_ENV"
           if ! git rev-parse -q --verify "refs/tags/$UPSTREAM_REF" >/dev/null; then
             git fetch --no-tags https://github.com/jasonlok000/titankeys "refs/tags/$UPSTREAM_REF:refs/tags/$UPSTREAM_REF"
@@ -45,6 +45,8 @@ jobs:
             echo "Applying $name"
             cat $(ls "$RUNNER_TEMP/totkey/$name".b64* | sort -V) | tr -d '\n\r ' | base64 -d | gunzip | git apply --whitespace=nowarn
           done
+          # Only Vietnamese, Mandarin Pinyin and English go in the APK; the rest stays in TitanKeys at UPSTREAM_REF.
+          python3 "$RUNNER_TEMP/trim.py"
           python3 -c "from PIL import Image" 2>/dev/null || pip install --quiet --break-system-packages pillow
           python3 -c "from PIL import Image; Image.open('android/src/main/res/drawable-nodpi/totkey_dog.png').convert('RGBA').resize((960, 960), Image.NEAREST).save('assets/icon.png')"
           sed -i -E "s/^version = .*/version = \"3.0.3\"/; s/^version_code = .*/version_code = $((1000 + GITHUB_RUN_NUMBER))/" ink.toml
