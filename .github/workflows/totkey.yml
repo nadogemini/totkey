@@ -45,13 +45,23 @@ jobs:
             echo "Applying $name"
             cat $(ls "$RUNNER_TEMP/totkey/$name".b64* | sort -V) | tr -d '\n\r ' | base64 -d | gunzip | git apply --whitespace=nowarn
           done
-          # Only Vietnamese, Mandarin Pinyin and English go in the APK; the rest stays in TitanKeys at UPSTREAM_REF.
-          python3 "$RUNNER_TEMP/trim.py"
           python3 -c "from PIL import Image" 2>/dev/null || pip install --quiet --break-system-packages pillow
           python3 -c "from PIL import Image; Image.open('android/src/main/res/drawable-nodpi/totkey_dog.png').convert('RGBA').resize((960, 960), Image.NEAREST).save('assets/icon.png')"
           sed -i -E "s/^version = .*/version = \"3.0.3\"/; s/^version_code = .*/version_code = $((1000 + GITHUB_RUN_NUMBER))/" ink.toml
           sed -i -E "s#^keystore = .*#keystore = \"$KEYSTORE_DIR/totkey.p12\"#; s/^key_alias = .*/key_alias = \"totkey\"/" ink.toml
           cat ink.toml
+
+      - name: Checks without a phone (Totkey's own, and the language framework's)
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/kotlinc.zip" https://github.com/JetBrains/kotlin/releases/download/v2.1.0/kotlin-compiler-2.1.0.zip
+          unzip -q "$RUNNER_TEMP/kotlinc.zip" -d "$RUNNER_TEMP"
+          export KOTLIN_HOME="$RUNNER_TEMP/kotlinc"
+          java -version
+          bash tests/totkey/run.sh
+          bash tests/languages/run.sh
+
+      - name: Only Vietnamese, Mandarin Pinyin and English in the APK (the rest stays in TitanKeys at UPSTREAM_REF)
+        run: python3 "$RUNNER_TEMP/trim.py"
 
       - name: Ink beside the app, with TitanKeys' Ink patch
         run: |
