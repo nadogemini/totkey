@@ -23,6 +23,11 @@ jobs:
       KEYSTORE_DIR: /home/runner/.totkey-keystore
       INK_KEYSTORE_PASSWORD: totkey-keystore
       INK_KEY_PASSWORD: totkey-keystore
+      # Totkey's on-device dictation, as the earlier Totkey had it.
+      SHERPA_VERSION: "1.13.8"
+      SHERPA_AAR_SHA256: "633c24321e06b1fe79feafa03ea16cbc0f8a286641e2da3559bac91bdb13bd96"
+      ASR_MODEL: "sherpa-onnx-zipformer-vi-30M-int8-2026-02-09"
+      ASR_MODEL_SHA256: "da8b637947091829d7ee9eda23da2a4ec7caa399233a3f4e34eb719fb2ea6b9b"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,7 +38,7 @@ jobs:
           echo "MAIN_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           mkdir -p "$RUNNER_TEMP/totkey"
           cp totkey/*.b64* "$RUNNER_TEMP/totkey/"
-          cp ink/titankeys-themes.patch totkey/trim.py "$RUNNER_TEMP/"
+          cp ink/titankeys-themes.patch totkey/trim.py totkey/sherpa.py "$RUNNER_TEMP/"
           echo "INK_PATCH_HASH=$(sha256sum ink/titankeys-themes.patch | cut -c1-16)" >> "$GITHUB_ENV"
           if ! git rev-parse -q --verify "refs/tags/$UPSTREAM_REF" >/dev/null; then
             git fetch --no-tags https://github.com/jasonlok000/titankeys "refs/tags/$UPSTREAM_REF:refs/tags/$UPSTREAM_REF"
@@ -50,6 +55,25 @@ jobs:
           sed -i -E "s/^version = .*/version = \"3.0.3\"/; s/^version_code = .*/version_code = $((1000 + GITHUB_RUN_NUMBER))/" ink.toml
           sed -i -E "s#^keystore = .*#keystore = \"$KEYSTORE_DIR/totkey.p12\"#; s/^key_alias = .*/key_alias = \"totkey\"/" ink.toml
           cat ink.toml
+
+      - name: On-device dictation (sherpa-onnx and its Vietnamese model)
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/sherpa-onnx.aar" \
+            "https://github.com/k2-fsa/sherpa-onnx/releases/download/v${SHERPA_VERSION}/sherpa-onnx-${SHERPA_VERSION}.aar"
+          echo "${SHERPA_AAR_SHA256}  $RUNNER_TEMP/sherpa-onnx.aar" | sha256sum -c -
+          python3 "$RUNNER_TEMP/sherpa.py" "$RUNNER_TEMP/sherpa-onnx.aar" android
+          # sherpa's JNI library asks for its own ONNX Runtime by the new name, and the swipe engine's keeps its own.
+          for lib in libsherpa-onnx-jni libsherpa-ort libonnxruntime; do readelf -d "android/jniLibs/arm64-v8a/$lib.so" > "$RUNNER_TEMP/$lib.txt"; done
+          grep -q 'NEEDED.*\[libsherpa-ort.so\]' "$RUNNER_TEMP/libsherpa-onnx-jni.txt"
+          grep -q 'SONAME.*\[libsherpa-ort.so\]' "$RUNNER_TEMP/libsherpa-ort.txt"
+          grep -q 'SONAME.*\[libonnxruntime.so\]' "$RUNNER_TEMP/libonnxruntime.txt"
+          curl -fsSL -o "$RUNNER_TEMP/model.tar.bz2" \
+            "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/${ASR_MODEL}.tar.bz2"
+          echo "${ASR_MODEL_SHA256}  $RUNNER_TEMP/model.tar.bz2" | sha256sum -c -
+          tar -xjf "$RUNNER_TEMP/model.tar.bz2" -C "$RUNNER_TEMP"
+          mkdir -p android/assets/asr-vi
+          for f in encoder.int8.onnx decoder.onnx joiner.int8.onnx tokens.txt; do cp "$RUNNER_TEMP/${ASR_MODEL}/$f" android/assets/asr-vi/; done
+          ls -la android/assets/asr-vi android/libs android/jniLibs/arm64-v8a
 
       - name: Checks without a phone (Totkey's own, and the language framework's)
         run: |
@@ -125,6 +149,14 @@ jobs:
           mkdir -p release
           cp "${apks[0]}" "release/Totkey-${GITHUB_RUN_NUMBER}.apk"
           "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" verify --print-certs "release/Totkey-${GITHUB_RUN_NUMBER}.apk" | grep -i "SHA-256" | head -1
+          # What Totkey adds is in the APK: dictation's libraries and model, both ONNX Runtimes, ML Kit, the status marks.
+          apk="release/Totkey-${GITHUB_RUN_NUMBER}.apk"
+          unzip -l "$apk" > "$RUNNER_TEMP/apk-list.txt"
+          for entry in lib/arm64-v8a/libsherpa-onnx-jni.so lib/arm64-v8a/libsherpa-ort.so lib/arm64-v8a/libonnxruntime.so \
+              assets/asr-vi/encoder.int8.onnx assets/asr-vi/tokens.txt assets/swipe-lang/pinyin.txt; do
+            grep -q " $entry\$" "$RUNNER_TEMP/apk-list.txt" || { echo "missing $entry"; exit 1; }
+          done
+          grep -E "mlkit|asr-vi|sherpa" "$RUNNER_TEMP/apk-list.txt" | head -20 || true
           cd release && sha256sum *.apk > SHA256SUMS
 
       - uses: actions/upload-artifact@v4
