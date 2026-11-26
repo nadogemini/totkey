@@ -1,6 +1,7 @@
 name: Totkey build
 
-# Totkey: TitanKeys (pinned at UPSTREAM_REF) with the patches in totkey/*.b64 (gzip + base64 git diffs, applied in order).
+# Totkey: TitanKeys (pinned at UPSTREAM_REF) with the patches in totkey/*.b64 (gzip + base64 git diffs, applied in order),
+# built the way TitanKeys builds: with the Ink checkout beside it (../ink at INK_REF) carrying tools/ink/titankeys.patch.
 on:
   push:
     branches: [main]
@@ -17,12 +18,11 @@ jobs:
     permissions:
       contents: write
     env:
-      INK_SKIP_SETUP: '1'
       UPSTREAM_REF: v3.0.3
+      INK_REF: 8a833ad
       KEYSTORE_DIR: /home/runner/.totkey-keystore
       INK_KEYSTORE_PASSWORD: totkey-keystore
       INK_KEY_PASSWORD: totkey-keystore
-      INK_KEY_ALIAS: totkey
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,60 +45,51 @@ jobs:
           done
           python3 -c "from PIL import Image" 2>/dev/null || pip install --quiet --break-system-packages pillow
           python3 -c "from PIL import Image; Image.open('android/src/main/res/drawable-nodpi/totkey_dog.png').convert('RGBA').resize((960, 960), Image.NEAREST).save('assets/icon.png')"
-          sed -i -E "s/^version = .*/version = \"3.0.3-totkey.${GITHUB_RUN_NUMBER}\"/; s/^version_code = .*/version_code = $((1000 + GITHUB_RUN_NUMBER))/" ink.toml
-          grep -E '^(name|package|version|version_code) ' ink.toml
+          sed -i -E "s/^version = .*/version = \"3.0.3\"/; s/^version_code = .*/version_code = $((1000 + GITHUB_RUN_NUMBER))/" ink.toml
+          sed -i -E "s#^keystore = .*#keystore = \"$KEYSTORE_DIR/totkey.p12\"#; s/^key_alias = .*/key_alias = \"totkey\"/" ink.toml
+          cat ink.toml
+
+      - name: Ink beside the app, with TitanKeys' Ink patch
+        run: |
+          git clone -q https://github.com/No-Scrolling/ink ../ink
+          git -C ../ink checkout -q "$INK_REF"
+          git -C ../ink apply tools/ink/titankeys.patch
+          cat ../ink/sdk.json
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: '1.4.2'
 
-      - id: app
-        name: Read app and Ink versions
-        env:
-          EVENT: workflow_dispatch
-        run: bun .github/ink-release.mjs metadata
-
-      - name: Install the pinned Ink release
-        env:
-          INK_VERSION: ${{ steps.app.outputs.ink }}
-          INK_HOME: ${{ runner.temp }}/ink
-          INK_BIN_DIR: ${{ runner.temp }}/ink-bin
-        run: |
-          curl -fsSL https://ink.noscroll.ing/install.sh -o "$RUNNER_TEMP/install-ink.sh"
-          sh "$RUNNER_TEMP/install-ink.sh"
-          echo "INK_HOME=$INK_HOME" >> "$GITHUB_ENV"
-          echo "INK_BIN_DIR=$INK_BIN_DIR" >> "$GITHUB_ENV"
-          echo "$INK_BIN_DIR" >> "$GITHUB_PATH"
-          echo "$INK_HOME/current/bin" >> "$GITHUB_PATH"
-
-      - id: tools
-        name: Read Ink build requirements
-        run: bun .github/ink-release.mjs toolchain
-
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: ${{ steps.tools.outputs.java }}
+          java-version: '17'
 
-      - name: Install Android and Rust build tools
-        env:
-          RUST_VERSION: ${{ steps.tools.outputs.rust }}
-          CARGO_NDK_VERSION: ${{ steps.tools.outputs.cargo_ndk }}
-          NDK_VERSION: ${{ steps.tools.outputs.ndk }}
-          PLATFORM_VERSION: ${{ steps.tools.outputs.platform }}
-          BUILD_TOOLS_VERSION: ${{ steps.tools.outputs.build_tools }}
+      - name: Rust, cargo-ndk and the Android SDK parts Ink asks for
         run: |
-          rustup toolchain install "$RUST_VERSION" --profile minimal --target aarch64-linux-android
-          cargo +"$RUST_VERSION" install cargo-ndk --version "$CARGO_NDK_VERSION" --locked
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
-            platform-tools "platforms;android-$PLATFORM_VERSION" \
-            "build-tools;$BUILD_TOOLS_VERSION" "ndk;$NDK_VERSION"
-          ink doctor
+          sdk=../ink/sdk.json
+          rust=$(jq -r .rust $sdk); ndk=$(jq -r .androidNdk $sdk); platform=$(jq -r .androidPlatform $sdk)
+          tools=$(jq -r .androidBuildTools $sdk); cargondk=$(jq -r .cargoNdk $sdk)
+          rustup toolchain install "$rust" --profile minimal --target aarch64-linux-android
+          cargo +"$rust" install cargo-ndk --version "$cargondk" --locked
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
+            platform-tools "platforms;android-$platform" "build-tools;$tools" "ndk;$ndk" > /dev/null
+          echo "BUILD_TOOLS=$tools" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ndk" >> "$GITHUB_ENV"
+
+      - name: Rust build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ../ink/target
+          key: totkey-ink-${{ env.INK_REF }}-${{ hashFiles('tools/ink/titankeys.patch') }}
 
       - name: Install the app's packages
         run: |
+          (cd ../ink && bun install --frozen-lockfile)
           bun install --frozen-lockfile
-          ink install
 
       - name: Signing key (kept between builds, so updates install over the last one)
         uses: actions/cache@v4
@@ -107,27 +98,20 @@ jobs:
           key: totkey-keystore-v1
 
       - name: Build the signed APK
-        env:
-          APK_NAME: ${{ steps.app.outputs.apk }}
-          BUILD_TOOLS_VERSION: ${{ steps.tools.outputs.build_tools }}
         run: |
-          umask 077
           mkdir -p "$KEYSTORE_DIR"
-          if [ ! -f "$KEYSTORE_DIR/totkey.jks" ]; then
-            keytool -genkeypair -keystore "$KEYSTORE_DIR/totkey.jks" -storetype PKCS12 -storepass "$INK_KEYSTORE_PASSWORD" \
-              -keypass "$INK_KEY_PASSWORD" -alias "$INK_KEY_ALIAS" -keyalg RSA -keysize 4096 -validity 36500 \
-              -dname "CN=Totkey"
+          if [ ! -f "$KEYSTORE_DIR/totkey.p12" ]; then
+            keytool -genkeypair -keystore "$KEYSTORE_DIR/totkey.p12" -storetype PKCS12 -storepass "$INK_KEYSTORE_PASSWORD" \
+              -keypass "$INK_KEY_PASSWORD" -alias totkey -keyalg RSA -keysize 4096 -validity 36500 -dname "CN=Totkey"
             echo "::notice::New signing key made: uninstall the old Totkey once before installing this build."
           fi
-          cp "$KEYSTORE_DIR/totkey.jks" "$RUNNER_TEMP/ink-release.jks"
-          bun .github/ink-release.mjs signing
-          ink build
+          ../ink/scripts/ink build
+          ls -la dist
           apks=(dist/*.apk)
-          if [ "${#apks[@]}" -ne 1 ]; then echo '::error::Expected exactly one APK.'; ls dist; exit 1; fi
           mkdir -p release
-          cp "${apks[0]}" "release/$APK_NAME"
-          "$ANDROID_HOME/build-tools/$BUILD_TOOLS_VERSION/apksigner" verify --print-certs "release/$APK_NAME" | grep -i "SHA-256" | head -1
-          cd release && sha256sum "$APK_NAME" > SHA256SUMS
+          cp "${apks[0]}" "release/Totkey-${GITHUB_RUN_NUMBER}.apk"
+          "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" verify --print-certs "release/Totkey-${GITHUB_RUN_NUMBER}.apk" | grep -i "SHA-256" | head -1
+          cd release && sha256sum *.apk > SHA256SUMS
 
       - uses: actions/upload-artifact@v4
         with:
@@ -143,7 +127,3 @@ jobs:
           gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$MAIN_SHA" --prerelease \
             --title "Totkey ${GITHUB_RUN_NUMBER}" --notes "Totkey dựa trên TitanKeys ${UPSTREAM_REF}. Bản build số ${GITHUB_RUN_NUMBER}." \
             release/*.apk release/SHA256SUMS
-
-      - name: Remove the signing key copy
-        if: always()
-        run: rm -f "$RUNNER_TEMP/ink-release.jks"
