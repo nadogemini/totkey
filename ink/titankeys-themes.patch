@@ -24,7 +24,7 @@ index 7046928..947167e 100644
  async function describe(theme) {
 diff --git a/crates/ink-core/src/accessibility.rs b/crates/ink-core/src/accessibility.rs
 new file mode 100644
-index 0000000..3857c7f
+index 0000000..4b61810
 --- /dev/null
 +++ b/crates/ink-core/src/accessibility.rs
 @@ -0,0 +1,161 @@
@@ -95,7 +95,7 @@ index 0000000..3857c7f
 +        };
 +        let event = |name| Some(PressTarget { node: node.identity, role: PressRole::Event(name) });
 +        match &node.kind {
-+            NodeKind::Field { label, value, action, disabled } => {
++            NodeKind::Field { label, value, action, disabled, .. } => {
 +                let role = if action.is_some() || *disabled { "button" } else { "text" };
 +                add(rect, label, value, role, !disabled, None, action.as_ref().and(event("onPress")), false);
 +            }
@@ -1077,7 +1077,7 @@ index 9ad7156..38c77ff 100644
          }).to_string()
      }
 diff --git a/crates/ink-core/src/react.rs b/crates/ink-core/src/react.rs
-index 9f473b0..b4bf1c0 100644
+index 9f473b0..f469fe5 100644
 --- a/crates/ink-core/src/react.rs
 +++ b/crates/ink-core/src/react.rs
 @@ -108,6 +108,7 @@ impl HostProps {
@@ -1088,15 +1088,7 @@ index 9f473b0..b4bf1c0 100644
                      value => bail!("unsupported text tone {value}"),
                  },
              });
-@@ -688,6 +689,7 @@ impl ReactTree {
-             tone,
-             text: content,
-             on_press,
-+            tone,
-         } = &host.props
-         {
-             let mut text_links = Vec::new();
-@@ -945,6 +947,7 @@ impl ReactTree {
+@@ -945,6 +946,7 @@ impl ReactTree {
              HostKind::Row => Node {
                  identity: NodeIdentity(id),
                  kind: NodeKind::Row {
@@ -1104,7 +1096,7 @@ index 9f473b0..b4bf1c0 100644
                      end: None,
                      children: self.children(host, depth)?,
                      has_image: props.get("hasImage") == Some(&Json::Bool(true)),
-@@ -975,7 +978,7 @@ impl ReactTree {
+@@ -975,7 +977,7 @@ impl ReactTree {
              HostKind::Screen | HostKind::MediaPickerScreen => {
                  let left_action = string(props, "leftIcon").map(|icon| {
                      ensure!(props.get("onLeftPress") == Some(&Json::Bool(true)), "Screen left action requires onPress");
@@ -1113,7 +1105,7 @@ index 9f473b0..b4bf1c0 100644
                  }).transpose()?;
                  // Several end actions arrive as `rightIcons`; each press reports its index.
                  let right_actions = if let Some(icons) = props.get("rightIcons") {
-@@ -983,12 +986,12 @@ impl ReactTree {
+@@ -983,12 +985,12 @@ impl ReactTree {
                      ensure!(icons.is_empty() || props.get("onRightPress") == Some(&Json::Bool(true)), "Screen right actions require onPress");
                      icons.iter().enumerate().map(|(index, icon)| {
                          let icon = icon.as_str().context("Screen rightIcons must be icon names")?;
@@ -1128,7 +1120,7 @@ index 9f473b0..b4bf1c0 100644
                      }).transpose()?.into_iter().collect()
                  };
                  let background = canvas_colour(props, "background")?.map(super::Colour::to_linear);
-@@ -1071,10 +1074,22 @@ impl ReactTree {
+@@ -1071,10 +1073,22 @@ impl ReactTree {
                      align,
                      justify,
                  );
@@ -1153,7 +1145,7 @@ index 9f473b0..b4bf1c0 100644
                      Node { identity: NodeIdentity(id), kind: NodeKind::Pressable {
                          haptic: props.get("haptic") != Some(&Json::Bool(false)),
                          selected: false,
-@@ -1122,6 +1137,8 @@ impl ReactTree {
+@@ -1122,6 +1136,8 @@ impl ReactTree {
                      options.keep_focus = props.get("keepFocus") == Some(&Json::Bool(true));
                      options.error = string(props, "error").unwrap_or("").to_owned();
                      options.label = string(props, "label").unwrap_or("").to_owned();
