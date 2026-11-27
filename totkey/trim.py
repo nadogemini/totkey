@@ -14,6 +14,7 @@ from pathlib import Path
 
 KEEP = {"vi", "zh-pinyin"}
 KEEP_SCHEMAS = {"tk_pinyin"}
+NO_ENGINE = {"vi"}
 # languages.json is keyed by language (zh covers every Chinese method), index.json by input method.
 KEEP_LANGUAGES = {"$global", "en", "vi", "zh"}
 
@@ -23,7 +24,18 @@ im = assets / "im"
 # Input methods: the index, the language pages, and each removed method's folder.
 index = json.loads((im / "index.json").read_text())
 removed = [entry["id"] for entry in index if entry["id"] not in KEEP]
-(im / "index.json").write_text(json.dumps([e for e in index if e["id"] in KEEP], ensure_ascii=False, indent=1) + "\n")
+kept = [e for e in index if e["id"] in KEEP]
+# Vietnamese types its letters straight into the field, Telex changing the word there (Composer.rewriter), as the earlier
+# Totkey did: no engine, so no code held back and no row of words (owner, 2026-11-27).
+for entry in kept:
+    if entry["id"] in NO_ENGINE:
+        entry["engine"] = None
+(im / "index.json").write_text(json.dumps(kept, ensure_ascii=False, indent=1) + "\n")
+for method in NO_ENGINE:
+    own = im / method / "im.json"
+    data = json.loads(own.read_text())
+    data["engine"] = None
+    own.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n")
 languages = json.loads((im / "languages.json").read_text())
 (im / "languages.json").write_text(
     json.dumps({k: v for k, v in languages.items() if k in KEEP_LANGUAGES}, ensure_ascii=False, indent=1) + "\n")
